@@ -48,7 +48,14 @@ export function makeCreate(mod: { typescript: typeof tss }) {
               // one sql`select * from person ${xxx ? sql.raw`aaa` : sql.raw`bbb`}` may generate two sqls, need to be explained one by one
               let query_configs = fake_expression(n);
               for (const qc of query_configs) {
-                let s: string = qc.text.replace(/\?\?/gm, config.mock);
+                // skip alter table statements
+                if((qc.text as string).split('\n').map(s=>s.trim()).join(' ').toLowerCase().startsWith('alter table')) {
+                  return make_diagnostic(1, tss.DiagnosticCategory.Suggestion, `alter table statements are skipped`);
+                }
+
+                let s: string = (qc.text as string).split('??').reduce((rtn, cur, idx) => {
+                  return idx < qc.values.length ? `${rtn}${cur}${qc.values[idx]  || config.mock}` : `${rtn}${cur}`;
+                }, '');
 
                 // ! Never pass unsanitized user input to child_process.execSync.
                 // let stdout = "";

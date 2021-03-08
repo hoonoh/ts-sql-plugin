@@ -1,4 +1,4 @@
-import ts from 'typescript'; // used as value, passed in by tsserver at runtime
+import ts, { SyntaxKind, TypeFlags } from 'typescript'; // used as value, passed in by tsserver at runtime
 // import tss from 'typescript/lib/tsserverlibrary'; // used as type only
 import { is_array, deep_flatten } from '@xialvjun/js-utils';
 
@@ -32,7 +32,37 @@ export const make_fake_expression = (
         ...n.template.templateSpans.map(span => span.literal.text),
       ] as unknown) as TemplateStringsArray;
       let values: any[][] = n.template.templateSpans
-        .map(span => fake_expression(span.expression))
+        .map(span => {
+          const fake = fake_expression(span.expression);
+          let mockOverride = "";
+          span.getChildren().forEach(c => {
+            if (c.getText().startsWith("JSON.stringify(")) {
+              mockOverride = `'{}'`;
+            } else if (c.getText().startsWith("sql.unnest(")) {
+              // sql.unnest(DATA_ARRAY, ['text', 'jsonb', 'timestamptz', 'timestamptz', 'text', 'jsonb'])
+              // -> unnest(array[]::"text"[], array[]::"jsonb"[], array[]::"timestamptz"[], array[]::"timestamptz"[])
+              mockOverride = `unnest(${c
+                .getChildAt(2)
+                .getChildAt(2)
+                .getChildAt(1)
+                .getChildren()
+                .reduce((rtn, arrTypeNode) => {
+                  // arrTypeNode.getText() is either pg column type with single quotes (e.g. `'text'`) or ','
+                  const arrayType = arrTypeNode.getText();
+                  if (arrayType !== ",") {
+                    return `${rtn}${rtn.length ? "," : ""}${`array[]::"${arrayType.replaceAll(`'`, "")}"[]`}`;
+                  }
+                  return rtn;
+                }, "")})`;
+            } else if (
+              type_checker.getTypeAtLocation(c).flags === TypeFlags.String ||
+              (ts.isIdentifier(c) && type_checker.getTypeAtLocation(c).flags === TypeFlags.StringLiteral)
+            ) {
+              mockOverride = `'text'`;
+            }
+          });
+          return mockOverride || fake;
+        })
         .map(v => (is_array(v) ? deep_flatten(v) : [v]));
 
       // * 要想编译期校验 sql, 则 sql 模板字符串内的所有有 sql.symbol 的对象都需要直接在模板字符串内定义(其实 and,ins,upd 可以不用, 只要给它们分配泛型类型就足够, 但是 raw 必须如此,
